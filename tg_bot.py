@@ -1,8 +1,8 @@
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher
-from CurrencyConverterBot.config import TOKEN
-from CurrencyConverterBot.handlers import router
+from CurrencyConverterBotV2.config import TOKEN
+from CurrencyConverterBotV2.handlers import router
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()

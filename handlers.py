@@ -1,96 +1,102 @@
-import asyncio
-from functools import partial
-from aiogram import F , Router
-from aiogram.filters import CommandStart,Command
-from aiogram.types import Message, CallbackQuery
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import StatesGroup, State
-from currency_converter import CurrencyConverter
-from CurrencyConverterBot import keyboards as kb
+import asyncio, re, requests, json
+from aiogram import Router, F
+from aiogram.filters import CommandStart, Command
+from aiogram.types import Message
+from CurrencyConverterBotV2.config import API_TOKEN
 
 
 router = Router()
-c = CurrencyConverter()
-
-class AmountMoney(StatesGroup):
-    choosing_amount_money = State()
-    choosing_currency = State()
 
 CURRENCIES = {
-    'USD': ('USD/Доллар🇺🇸', 'USD'),
-    'EUR': ('EUR/Евро🇪🇺', 'EUR'),
-    'JPY': ('JPY/Японская иена🇯🇵', 'JPY'),
-    'CZK': ('CZK/Чешская крона🇨🇿', 'CZK'),
-    'DKK': ('DKK/Датская крона🇩🇰', 'DKK'),
-    'GBP': ('GBP/Фунт стерлингов🇬🇧', 'GBP'),
-    'CAD': ('CAD/Канадский доллар🇨🇦', 'CAD'),
-    'CNY': ('CNY/Китайский юань🇨🇳', 'CNY'),
-    'PHP': ('PHP/Филиппинское песо🇵🇭', 'PHP'),
-    'MXN': ('MXN/Мексиканский песо🇲🇽', 'MXN'),
-    'INR': ('INR/Индийская рупия🇮🇳', 'INR'),
-    'TRY': ('TRY/Турецкая лира🇹🇷', 'TRY'),
+    "USD": ["$", "USD", "доллар", "долларов", "бакс","баксов", "юзд", "🇺🇸"],
+    "EUR": ["€", "EUR", "евро", "🇪🇺"],
+    "BYN": ["Br", "BYN", "бун", "бел рублей", "🇧🇾"],
+    "RUB": ["₽", "RUB", "руб", "рублей", "рубль", "🇷🇺"],
+    "KZT": ["₸", "KZT", "тенге", "🇰🇿"],
+    "PLN": ["zł", "PLN", "злотых", "🇵🇱"],
+    "UAH": ["₴", "UAH", "гривна", "гривен", "🇺🇦"]
 }
+CURRENCY_FLAGS = {
+    "USD": "🇺🇸",
+    "EUR": "🇪🇺",
+    "BYN": "🇧🇾",
+    "RUB": "🇷🇺",
+    "KZT": "🇰🇿",
+    "PLN": "🇵🇱",
+    "UAH": "🇺🇦"
+}
+
+def extract_amount_and_currency(text: str) -> tuple[float, str] | None:
+    pattern = r'^@NimbleExBot\s+(\d+[.]\d+|\d+)\s*([a-zA-Zа-яА-Я]+)'
+    matches = re.findall(pattern, text)
+    if not matches:
+        return None
+    try:
+        amount = float(matches[0][0])
+        currency = str(matches[0][1]).strip().upper()
+        for code, symbols in CURRENCIES.items():
+            if currency in [s.upper() for s in symbols]:
+                return amount, code
+    except ValueError:
+        return None
+
+def currency_converter(amount: float, base_currency: str):
+    url = f'https://v6.exchangerate-api.com/v6/{API_TOKEN}/latest/{base_currency}'
+    try:
+        r = requests.get(url=url)
+        if r.ok:
+            rjson = r.json()
+            conversion_rates = rjson["conversion_rates"]
+            target_currencies = list(CURRENCIES.keys())
+            base_flag = CURRENCY_FLAGS.get(base_currency)
+            results = []
+        else:
+            return None
+        if not amount > 1000000000 and amount != 0:
+            for target_currency in target_currencies:
+                if target_currency == base_currency:
+                    continue
+                if target_currency in conversion_rates:
+                    target_flag = CURRENCY_FLAGS.get(target_currency)
+                    operation = amount * conversion_rates[target_currency]
+                    results.append(f'{amount} {base_currency}{base_flag} = {round(operation, 2)} {target_currency}{target_flag}')
+                else:
+                    return None
+        else:
+            return None
+        if results:
+            return results
+        else:
+            return None
+    except ValueError:
+        return None
+
 @router.message(CommandStart())
 async def start_command(message: Message):
-    await message.answer(text=f'Привет, {message.from_user.first_name}! Это конвертер актуальных курсов самых популярных валют мира, предоставляемых Европейским центральным банком.💸\n\n'
-                              'Обновление курсов валют происходит ежедневно.💲')
-    await asyncio.sleep(1)
-    await message.reply(text='Отправьте сумму, которую нужно перевести в другую валюту.💵 \n(Без лишних символов)')
+    await message.answer('Примеры команд боту: \n25.25 rub\n25 usd\n25 byn\n25 руб\n25 тенге')
 
 @router.message(Command('list'))
-async def currencies_lists(message: Message):
-    all_currencies = [currency_title for _, (currency_title, _) in CURRENCIES.items()]
-    await message.answer(f'Список поддерживаемых валют: \n\n{'\n'.join(all_currencies)}')
+async def list_currencies(message: Message):
+    currencies = []
+    for curr in CURRENCIES.keys():
+        target_flag = CURRENCY_FLAGS.get(curr)
+        currencies.append(f'{curr}{target_flag}')
+    await message.answer(f'Список поддерживаемых валют: \n{'\n'.join(currencies)}')
 
 @router.message(F.text)
-async def summa(message: Message, state: FSMContext):
-    try:
-        amount = float(message.text.strip())
-        if amount <= 0:
-            await message.reply(text='Число должно быть больше нуля❌. Отправьте сумму')
-            return
-        if amount > 1_000_000_000:
-            await message.reply(text='Сумма слишком большая❌. Отправьте сумму до 1 миллиарда')
-            return
-
-        await state.update_data(amount=amount)
-        await message.reply(
-            text='Выберите валюту своей суммы💱',
-            reply_markup=kb.main
-        )
-        await state.set_state(AmountMoney.choosing_currency)
-    except ValueError:
-        await message.reply(text='Неверный формат❌. Отправьте сумму')
+async def summa(message: Message):
+    extracted_data = extract_amount_and_currency(message.text)
+    if extracted_data:
+        amount = extracted_data[0]
+        base_currency = extracted_data[1]
+        conversion_results = currency_converter(amount, base_currency)
+        if conversion_results:
+            await message.answer('\n'.join(conversion_results))
+        else:
+            await message.answer('Число слишком большое или равно нулю')
+    else:
+        return
 
 
-async def convert_and_show(callback: CallbackQuery, state: FSMContext, base_currency: str):
-    user_data = await state.get_data()
-    amount = user_data.get('amount')
-    await callback.answer('')
-    await asyncio.sleep(1)
-    try:
-        results = []
-        for currency_code, (currency_name, _) in CURRENCIES.items():
-            if currency_code != base_currency:
-                converted_amount = c.convert(
-                    amount=amount,
-                    currency=base_currency,
-                    new_currency=currency_code)
-                results.append(f"{round(converted_amount, 2)}      {currency_name}")
 
-        await callback.message.edit_text(
-            f'Результат конвертации {amount} {base_currency} :\n\n' + '\n\n'.join(results)
-        )
-        await asyncio.sleep(1.5)
-        await callback.message.answer('Отправьте сумму:')
-    except Exception as e:
-        await callback.message.edit_text(f'Произошла ошибка: {str(e)}')
-        await callback.message.answer('Отправьте сумму:')
-    finally:
-        await state.clear()
 
-for currency_code in CURRENCIES:
-    handler = partial(convert_and_show, base_currency=currency_code)
-    router.callback_query(
-        AmountMoney.choosing_currency,
-        F.data == currency_code)(handler)
