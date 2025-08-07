@@ -2,8 +2,7 @@ import asyncio, re, requests, json
 from aiogram import Router, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message
-from CurrencyConverterBotV2.config import API_TOKEN
-
+from config import API_TOKEN
 
 router = Router()
 
@@ -16,6 +15,7 @@ CURRENCIES = {
     "PLN": ["zł", "PLN", "злотых", "🇵🇱"],
     "UAH": ["₴", "UAH", "гривна", "гривен", "🇺🇦"]
 }
+
 CURRENCY_FLAGS = {
     "USD": "🇺🇸",
     "EUR": "🇪🇺",
@@ -25,9 +25,9 @@ CURRENCY_FLAGS = {
     "PLN": "🇵🇱",
     "UAH": "🇺🇦"
 }
-
+# Функция для получения числа и валюты из текста пользователя
 def extract_amount_and_currency(text: str) -> tuple[float, str] | None:
-    pattern = r'^@NimbleExBot\s+(\d+[.]\d+|\d+)\s*([a-zA-Zа-яА-Я]+)'
+    pattern = r'(\d+[.]\d+|\d+)\s*([a-zA-Zа-яА-Я]+)'
     matches = re.findall(pattern, text)
     if not matches:
         return None
@@ -39,7 +39,7 @@ def extract_amount_and_currency(text: str) -> tuple[float, str] | None:
                 return amount, code
     except ValueError:
         return None
-
+# Функция для процесса конвертирования
 def currency_converter(amount: float, base_currency: str):
     url = f'https://v6.exchangerate-api.com/v6/{API_TOKEN}/latest/{base_currency}'
     try:
@@ -70,11 +70,11 @@ def currency_converter(amount: float, base_currency: str):
             return None
     except ValueError:
         return None
-
+# Хендлер на команду /start
 @router.message(CommandStart())
 async def start_command(message: Message):
     await message.answer('Примеры команд боту: \n25.25 rub\n25 usd\n25 byn\n25 руб\n25 тенге')
-
+# Хендлер на команду /list, выведение всех доступных валют
 @router.message(Command('list'))
 async def list_currencies(message: Message):
     currencies = []
@@ -82,7 +82,7 @@ async def list_currencies(message: Message):
         target_flag = CURRENCY_FLAGS.get(curr)
         currencies.append(f'{curr}{target_flag}')
     await message.answer(f'Список поддерживаемых валют: \n{'\n'.join(currencies)}')
-
+# Основной хендлер, который реагирует на текст пользователя
 @router.message(F.text)
 async def summa(message: Message):
     extracted_data = extract_amount_and_currency(message.text)
