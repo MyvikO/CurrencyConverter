@@ -1,4 +1,5 @@
-import asyncio, re, requests, json
+import re, requests
+from decimal import *
 from aiogram import Router, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message
@@ -7,10 +8,10 @@ from config import API_TOKEN
 router = Router()
 
 CURRENCIES = {
-    "USD": ["$", "USD", "доллар", "долларов", "бакс","баксов", "юзд", "🇺🇸"],
+    "USD": ["$", "USD", "доллар", "долларов", "доллара", "бакс","баксов", "бакса", "юзд", "🇺🇸"],
     "EUR": ["€", "EUR", "евро", "🇪🇺"],
     "BYN": ["Br", "BYN", "бун", "бел рублей", "🇧🇾"],
-    "RUB": ["₽", "RUB", "руб", "рублей", "рубль", "🇷🇺"],
+    "RUB": ["₽", "RUB", "руб", "рубля", "рублей", "рубль", "🇷🇺"],
     "KZT": ["₸", "KZT", "тенге", "🇰🇿"],
     "PLN": ["zł", "PLN", "злотых", "🇵🇱"],
     "UAH": ["₴", "UAH", "гривна", "гривен", "🇺🇦"]
@@ -27,13 +28,14 @@ CURRENCY_FLAGS = {
 }
 # Функция для получения числа и валюты из текста пользователя
 def extract_amount_and_currency(text: str) -> tuple[float, str] | None:
-    pattern = r'(\d+[.]\d+|\d+)\s*([a-zA-Zа-яА-Я]+)'
-    matches = re.findall(pattern, text)
+    pattern = '(\\d+(?:[.,]\\d+)?)\\s*([\\$€₽₸₴]|[A-Za-zА-Яа-яЁёŁł]+(?:\\s+[A-Za-zА-Яа-яЁёŁł]+){0,2}|[\U0001F1E6-\U0001F1FF]{2})'
+    matches = re.search(pattern, text)
     if not matches:
         return None
     try:
-        amount = float(matches[0][0])
-        currency = str(matches[0][1]).strip().upper()
+        amount_str = matches.group(1)
+        amount = float(amount_str.replace(",", "."))
+        currency = str(matches.group(2)).strip().upper()
         for code, symbols in CURRENCIES.items():
             if currency in [s.upper() for s in symbols]:
                 return amount, code
@@ -73,7 +75,7 @@ def currency_converter(amount: float, base_currency: str):
 # Хендлер на команду /start
 @router.message(CommandStart())
 async def start_command(message: Message):
-    await message.answer('Примеры команд боту: \n25.25 rub\n25 usd\n25 byn\n25 руб\n25 тенге')
+    await message.answer('Примеры команд боту: \n25.25 rub\n25,25рублей\n25 usd\n25 byn\n25 руб\n25 тенге')
 # Хендлер на команду /list, выведение всех доступных валют
 @router.message(Command('list'))
 async def list_currencies(message: Message):
