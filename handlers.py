@@ -1,10 +1,14 @@
-import re, requests
+import re, requests, json
 from aiogram import Router, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message
-from config import *
+from config import CRYPTO_URL,FIAT_URL, API_TOKEN_CRYPTO, API_TOKEN_FIAT
+from currencies import CRYPTO_CURRENCIES, ALL_CURRENCIES, CURRENCY_FLAGS
+from redis_client import get_redis
 
 router = Router()
+
+redis_client = get_redis()
 
 # Функция для получения числа и валюты из текста пользователя
 def extract_amount_and_currency(text: str) -> tuple[float, str] | None:
@@ -21,6 +25,19 @@ def extract_amount_and_currency(text: str) -> tuple[float, str] | None:
                 return amount, code
     except ValueError:
         return None
+
+#Функция кэширования запросов фиата redis
+def get_request_fiat(url, base_upper):
+    key = f"fiat:latest:{base_upper}"
+    r = redis_client.get(key)
+    if r:
+        return json.loads(r)
+    r = requests.get(url=url, timeout=5)
+    r.raise_for_status()
+    rjson = r.json()
+    redis_client.setex(key, 43200, json.dumps(rjson))
+    return rjson
+
 # Функция для процесса конвертирования
 def currency_converter(amount: float, base_currency: str):
     base_upper = base_currency.upper()
@@ -32,15 +49,15 @@ def currency_converter(amount: float, base_currency: str):
 
     # Запрос фиат валют
     try:
-        url = f'https://v6.exchangerate-api.com/v6/{API_TOKEN_FIAT}/latest/{base_upper}'
-        r = requests.get(url=url, timeout=5)
-        if r.ok:
-            rjson = r.json()
-            conversion_rates = rjson.get("conversion_rates", {}) or {}
+        url = f'{FIAT_URL}/{API_TOKEN_FIAT}/latest/{base_upper}'
+        request_fiat = get_request_fiat(url, base_upper)
+        if request_fiat:
+            conversion_rates = request_fiat.get("conversion_rates", {}) or {}
     except requests.RequestException:
         pass
+
     # Запрос криптовалют
-    coin_ids = sorted({v["id"] for v in ASSETS.values() if "id" in v}) # ['bitcoin', 'ethereum', 'solana', 'the-open-network']
+    coin_ids = sorted({v["id"] for v in CRYPTO_CURRENCIES.values() if "id" in v}) # ['bitcoin', 'ethereum', 'solana', 'the-open-network']
 
     headers = {"accept": "application/json", "x-cg-demo-api-key": API_TOKEN_CRYPTO}
 
@@ -58,7 +75,7 @@ def currency_converter(amount: float, base_currency: str):
     except requests.RequestException:
         pass
 
-    for symbol, values in ASSETS.items():
+    for symbol, values in CRYPTO_CURRENCIES.items():
         price = None
         if "id" in values:
             data = r1_json.get(values["id"])
@@ -68,13 +85,14 @@ def currency_converter(amount: float, base_currency: str):
         if isinstance(price, (int, float)):
             conversion_rates[symbol] = float(price)
 
-    # Если базовая валюта - криптовалюта: добираем её цену в фиатах (crypto -> fiat)
-    if base_upper in ASSETS:
-        base_asset = ASSETS.get(base_upper, {})
+    # Если базовая валюта - криптовалюта: добираем её цену в фиатах
+    if base_upper in CRYPTO_CURRENCIES:
+        base_asset = CRYPTO_CURRENCIES.get(base_upper, {})
         base_id = base_asset.get("id")
 
         # Запрашиваем список поддерживаемых фиатных валют
         vs_supported = set()
+
         try:
             r_vs = requests.get(f"{CRYPTO_URL}/simple/supported_vs_currencies",
                                 headers=headers, timeout=5)
@@ -87,7 +105,7 @@ def currency_converter(amount: float, base_currency: str):
             pass
 
         # Фиаты, которые поддерживает CoinGecko
-        fiat_targets = [code for code in ALL_CURRENCIES.keys() if code not in ASSETS]
+        fiat_targets = [code for code in ALL_CURRENCIES.keys() if code not in CRYPTO_CURRENCIES]
         fiat_supported = [c for c in fiat_targets if c.lower() in vs_supported]
 
         if base_id and fiat_supported:
@@ -113,7 +131,7 @@ def currency_converter(amount: float, base_currency: str):
             if target_currency == base_upper:
                 continue
             target_flag = CURRENCY_FLAGS.get(target_currency, "")
-            if target_currency in ASSETS:
+            if target_currency in CRYPTO_CURRENCIES:
                 if target_currency in conversion_rates:
                     rate = float(conversion_rates[target_currency])
                     converted = round(amount / rate, 4)
