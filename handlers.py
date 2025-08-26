@@ -26,7 +26,7 @@ def extract_amount_and_currency(text: str) -> tuple[float, str] | None:
     except ValueError:
         return None
 
-#Функция кэширования запросов фиата redis
+#Функция кэширования запросов фиата
 def get_request_fiat(url, base_upper):
     key = f"fiat:latest:{base_upper}"
     r = redis_client.get(key)
@@ -34,8 +34,22 @@ def get_request_fiat(url, base_upper):
         return json.loads(r)
     r = requests.get(url=url, timeout=5)
     r.raise_for_status()
-    rjson = r.json()
+    rjson = r.json() or []
     redis_client.setex(key, 43200, json.dumps(rjson))
+    return rjson
+
+# Функция кэширования доступных фиатных валют
+def get_available_fiat(url, headers, timeout):
+    key = f"fiat:supported_vs_currencies"
+    r = redis_client.get(key)
+    if r:
+        return json.loads(r)
+    r = requests.get(url=url, headers=headers, timeout=timeout)
+    r.raise_for_status()
+    rjson = r.json() or []
+    if not isinstance(rjson, list):
+        rjson = []
+    redis_client.setex(key, 3600, json.dumps(rjson))
     return rjson
 
 # Функция для процесса конвертирования
@@ -92,15 +106,11 @@ def currency_converter(amount: float, base_currency: str):
 
         # Запрашиваем список поддерживаемых фиатных валют
         vs_supported = set()
-
         try:
-            r_vs = requests.get(f"{CRYPTO_URL}/simple/supported_vs_currencies",
-                                headers=headers, timeout=5)
-            if r_vs.ok:
-                r_vs_json = r_vs.json() or []
-                if not isinstance(r_vs_json, list):
-                    r_vs_json = []
-                vs_supported = {s.lower() for s in r_vs_json if isinstance(s, str)}
+            url = f"{CRYPTO_URL}/simple/supported_vs_currencies"
+            request_supported_fiat = get_available_fiat(url=url, headers=headers, timeout=5)
+            if request_supported_fiat:
+                vs_supported = {s.lower() for s in request_supported_fiat if isinstance(s, str)}
         except requests.RequestException:
             pass
 
