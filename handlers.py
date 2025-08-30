@@ -28,6 +28,12 @@ def extract_amount_and_currency(text: str) -> tuple[float, str] | None:
     except ValueError:
         return None
 
+# Функция для форматирования в приличный вид конвертации
+def format_money(amount, digits: int):
+    NBSP = '\u202F'
+    s = format(amount, f",.{digits}f").replace(',', NBSP).replace('.', ',')
+    return s + NBSP
+
 # Функция для получения ttl, необходимое функции get_request_fiat
 def ttl_from_response(data: dict, default_ttl=1920, max_ttl=43200) -> int:
     now = int(time.time())
@@ -70,6 +76,7 @@ def get_available_fiat(url, headers, timeout):
 
 # Функция для процесса конвертирования
 def currency_converter(amount: float, base_currency: str):
+    format_amount = format_money(amount, digits=1)
     base_upper = base_currency.upper()
     base_lower = base_currency.lower()
     if not (0 < amount <= 1_000_000_000):
@@ -161,12 +168,14 @@ def currency_converter(amount: float, base_currency: str):
                 if target_currency in conversion_rates:
                     rate = float(conversion_rates[target_currency])
                     converted = round(amount / rate, 4)
-                    results.append(f'{amount} {base_currency}{base_flag} = {converted} {target_currency}{target_flag}')
+                    format_converted = format_money(converted, digits=2)
+                    results.append(f'{format_amount} {base_currency}{base_flag} = {format_converted} {target_currency}{target_flag}')
             else:
                 if target_currency in conversion_rates:
                     rate = float(conversion_rates[target_currency])
                     converted = round(amount * rate, 2)
-                    results.append(f'{amount} {base_currency}{base_flag} = {converted} {target_currency}{target_flag}')
+                    format_converted = format_money(converted, digits=2)
+                    results.append(f'{format_amount} {base_currency}{base_flag} = {format_converted} {target_currency}{target_flag}')
     return results or None
 # Хендлер на команду /start
 @router.message(CommandStart())
@@ -191,7 +200,7 @@ async def list_currencies(message: Message):
     await message.answer(f'Список поддерживаемых валют: \n{'\n'.join(currencies)}')
 # Основной хендлер, который реагирует на текст пользователя
 @router.message(F.text)
-async def summa(message: Message):
+async def summ(message: Message):
     extracted = extract_amount_and_currency(message.text)
     if extracted:
         amount, base_currency = extracted
