@@ -31,7 +31,7 @@ def extract_amount_and_currency(text: str) -> tuple[float, str] | None:
 # Функция для форматирования в приличный вид конвертации
 def format_money(amount, digits: int):
     NBSP = '\u202F'
-    s = format(amount, f",.{digits}f").replace(',', NBSP).replace('.', ',')
+    s = format(amount, f",.{digits}f")
     return s + NBSP
 
 # Функция для получения ttl, необходимое функции get_request_fiat
@@ -168,7 +168,7 @@ def currency_converter(amount: float, base_currency: str):
                 if target_currency in conversion_rates:
                     rate = float(conversion_rates[target_currency])
                     converted = round(amount / rate, 4)
-                    format_converted = format_money(converted, digits=2)
+                    format_converted = format_money(converted, digits=4)
                     results.append(f'{format_amount} {base_currency}{base_flag} = {format_converted} {target_currency}{target_flag}')
             else:
                 if target_currency in conversion_rates:
