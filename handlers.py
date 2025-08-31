@@ -1,7 +1,6 @@
 import re, requests, json, time, random
 import keyboards as kb
 from aiogram import Router, F
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, CallbackQuery
 from config import CRYPTO_URL,FIAT_URL, API_TOKEN_CRYPTO, API_TOKEN_FIAT
@@ -13,7 +12,7 @@ router = Router()
 redis_client = get_redis()
 
 # Функция для получения числа и валюты из текста пользователя
-def extract_amount_and_currency(text: str) -> tuple[float, str] | None:
+def parse_amount_and_currency(text: str) -> tuple[float, str] | None:
     pattern = '(\\d+(?:[.,]\\d+)?)\\s*([\\$€₽₸₴]|[A-Za-zА-Яа-яЁёŁł]+(?:\\s+[A-Za-zА-Яа-яЁёŁł]+){0,2}|[\U0001F1E6-\U0001F1FF]{2})'
     matches = re.search(pattern, text)
     if not matches:
@@ -28,14 +27,13 @@ def extract_amount_and_currency(text: str) -> tuple[float, str] | None:
     except ValueError:
         return None
 
-# Функция для форматирования в приличный вид конвертации
-def format_money(amount, digits: int):
-    NBSP = '\u202F'
+# Функция для форматирования в приличный вид amount
+def format_amount(amount, digits: int):
     s = format(amount, f",.{digits}f")
-    return s + NBSP
+    return s
 
 # Функция для получения ttl, необходимое функции get_request_fiat
-def ttl_from_response(data: dict, default_ttl=1920, max_ttl=43200) -> int:
+def compute_ttl_from_response(data: dict, default_ttl=1920, max_ttl=43200) -> int:
     now = int(time.time())
     nxt = data.get("time_next_update_unix")
     if isinstance(nxt, (int, float)) and nxt > now:
@@ -48,7 +46,7 @@ def ttl_from_response(data: dict, default_ttl=1920, max_ttl=43200) -> int:
 
 
 #Функция кэширования запросов фиата
-def get_request_fiat(url, base_upper):
+def get_fiat_rates_cached(url, base_upper):
     key = f"fiat:latest:{base_upper}"
     r = redis_client.get(key)
     if r:
@@ -56,12 +54,12 @@ def get_request_fiat(url, base_upper):
     r = requests.get(url=url, timeout=5)
     r.raise_for_status()
     rjson = r.json() or []
-    ttl = ttl_from_response(rjson)
+    ttl = compute_ttl_from_response(rjson)
     redis_client.setex(key, ttl, json.dumps(rjson))
     return rjson
 
 # Функция кэширования доступных фиатных валют
-def get_available_fiat(url, headers, timeout):
+def get_supported_vs_currencies_cached(url, headers, timeout):
     key = f"fiat:supported_vs_currencies"
     r = redis_client.get(key)
     if r:
@@ -76,7 +74,7 @@ def get_available_fiat(url, headers, timeout):
 
 # Функция для процесса конвертирования
 def currency_converter(amount: float, base_currency: str):
-    format_amount = format_money(amount, digits=1)
+    format_base_amount = format_amount(amount, digits=1)
     base_upper = base_currency.upper()
     base_lower = base_currency.lower()
     if not (0 < amount <= 1_000_000_000):
@@ -87,7 +85,7 @@ def currency_converter(amount: float, base_currency: str):
     # Запрос фиат валют
     try:
         url = f'{FIAT_URL}/{API_TOKEN_FIAT}/latest/{base_upper}'
-        request_fiat = get_request_fiat(url, base_upper)
+        request_fiat = get_fiat_rates_cached(url, base_upper)
         if request_fiat:
             conversion_rates = request_fiat.get("conversion_rates", {}) or {}
     except requests.RequestException:
@@ -131,7 +129,7 @@ def currency_converter(amount: float, base_currency: str):
         vs_supported = set()
         try:
             url = f"{CRYPTO_URL}/simple/supported_vs_currencies"
-            request_supported_fiat = get_available_fiat(url=url, headers=headers, timeout=5)
+            request_supported_fiat = get_supported_vs_currencies_cached(url=url, headers=headers, timeout=5)
             if request_supported_fiat:
                 vs_supported = {s.lower() for s in request_supported_fiat if isinstance(s, str)}
         except requests.RequestException:
@@ -168,14 +166,14 @@ def currency_converter(amount: float, base_currency: str):
                 if target_currency in conversion_rates:
                     rate = float(conversion_rates[target_currency])
                     converted = round(amount / rate, 4)
-                    format_converted = format_money(converted, digits=4)
-                    results.append(f'{format_amount} {base_currency}{base_flag} = {format_converted} {target_currency}{target_flag}')
+                    format_converted = format_amount(converted, digits=4)
+                    results.append(f'{format_base_amount} {base_currency}{base_flag} = {format_converted} {target_currency}{target_flag}')
             else:
                 if target_currency in conversion_rates:
                     rate = float(conversion_rates[target_currency])
                     converted = round(amount * rate, 2)
-                    format_converted = format_money(converted, digits=2)
-                    results.append(f'{format_amount} {base_currency}{base_flag} = {format_converted} {target_currency}{target_flag}')
+                    format_converted = format_amount(converted, digits=2)
+                    results.append(f'{format_base_amount} {base_currency}{base_flag} = {format_converted} {target_currency}{target_flag}')
     return results or None
 # Хендлер на команду /start
 @router.message(CommandStart())
@@ -195,13 +193,13 @@ async def start_command(message: Message):
 async def list_currencies(message: Message):
     currencies = []
     for curr in ALL_CURRENCIES.keys():
-        target_flag = CURRENCY_FLAGS.get(curr)
+        target_flag = CURRENCY_FLAGS.get(curr, "")
         currencies.append(f' • {curr}{target_flag}')
     await message.answer(f'Список поддерживаемых валют: \n{'\n'.join(currencies)}')
 # Основной хендлер, который реагирует на текст пользователя
 @router.message(F.text)
-async def summ(message: Message):
-    extracted = extract_amount_and_currency(message.text)
+async def handle_conversion_request(message: Message):
+    extracted = parse_amount_and_currency(message.text)
     if extracted:
         amount, base_currency = extracted
         conversion_results = currency_converter(amount, base_currency)
@@ -213,27 +211,23 @@ async def summ(message: Message):
         return
 
 @router.callback_query(F.data == "update")
-async def update(callback: CallbackQuery):
+async def handle_update_rates_callback(callback: CallbackQuery):
     old_text = callback.message.text or ""
-    extracted = extract_amount_and_currency(old_text)
+    extracted = parse_amount_and_currency(old_text)
+
     if not extracted:
-        return await callback.message.edit_text("Не смог разобрать сумму/валюту из сообщения", show_alert=True)
+        return await callback.answer("Не смог разобрать сумму/валюту из сообщения", show_alert=True)
+
     amount, base_currency = extracted
     conversion_results = currency_converter(amount, base_currency)
     if not conversion_results:
-        return await callback.message.edit_text("Ошибка при получении курсов", show_alert=True)
+        return await callback.answer("Ошибка при получении курсов", show_alert=True)
 
     new_text = '\n'.join(conversion_results)
     if new_text == old_text:
         return await callback.answer("Курсы не изменились 👍")
 
-    try:
-        await callback.message.edit_text(new_text, reply_markup=kb.main)
-    except TelegramBadRequest as e:
-        if "message is not modified" in str(e).lower():
-            await callback.answer("Курсы не изменились 👍")
-        else:
-            raise
+    return await callback.message.edit_text(new_text, reply_markup=kb.main)
 
 
 
