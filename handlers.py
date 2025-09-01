@@ -73,12 +73,12 @@ def get_supported_vs_currencies_cached(url, headers, timeout):
     return rjson
 
 # Функция для процесса конвертирования
-def currency_converter(amount: float, base_currency: str):
+def currency_converter(amount: float, base_currency: str) -> list:
     format_base_amount = format_amount(amount, digits=1)
     base_upper = base_currency.upper()
     base_lower = base_currency.lower()
     if not (0 < amount <= 1_000_000_000):
-        return None
+        raise
 
     conversion_rates = {}
 
@@ -204,30 +204,30 @@ async def handle_conversion_request(message: Message):
         amount, base_currency = extracted
         conversion_results = currency_converter(amount, base_currency)
         if conversion_results:
-            await message.answer('\n'.join(conversion_results), reply_markup=kb.main)
+            await message.answer('\n'.join(conversion_results), reply_markup=kb.main(amount, base_currency))
         else:
             await message.answer('Ошибка, повторите запрос')
     else:
         return
 
-@router.callback_query(F.data == "update")
+@router.callback_query(F.data.startswith('update:'))
 async def handle_update_rates_callback(callback: CallbackQuery):
-    old_text = callback.message.text or ""
-    extracted = parse_amount_and_currency(old_text)
+    old_text = callback.message.text
+    try:
+        _, amount_str, base_currency = callback.data.split(":")
+        amount = float(amount_str.replace(",", ""))
+    except Exception:
+        return await callback.answer("Некорректные данные кнопки")
 
-    if not extracted:
-        return await callback.answer("Не смог разобрать сумму/валюту из сообщения", show_alert=True)
-
-    amount, base_currency = extracted
     conversion_results = currency_converter(amount, base_currency)
     if not conversion_results:
-        return await callback.answer("Ошибка при получении курсов", show_alert=True)
+        return await callback.answer("Ошибка при получении курсов")
 
     new_text = '\n'.join(conversion_results)
     if new_text == old_text:
         return await callback.answer("Курсы не изменились 👍")
 
-    return await callback.message.edit_text(new_text, reply_markup=kb.main)
+    return await callback.message.edit_text(new_text, reply_markup=kb.main(amount, base_currency))
 
 
 
